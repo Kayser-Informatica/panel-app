@@ -1,25 +1,16 @@
-FROM node:16-alpine AS build
+FROM node:8 AS build
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+COPY . /app
 
-# Install dependencies
-RUN npm install
-
-# Copy source code
-COPY . .
-
-# Build web version
-RUN npm run build:web
-
-# Verify build output exists
-RUN ls -la /app/dist/web || (echo "Build failed - dist/web directory not found" && exit 1)
+RUN npm install && \
+    npm run build:web && \
+    ls -la /app/dist/ && \
+    ls -la /app/dist/web/ || echo "ERROR: dist/web directory not found!"
 
 FROM nginx:alpine
 
-# Copy built files from build stage
 COPY --from=build --chown=nginx:nginx /app/dist/web /usr/share/nginx/html
 
 EXPOSE 80

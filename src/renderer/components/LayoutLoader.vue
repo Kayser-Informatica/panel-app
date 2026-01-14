@@ -24,7 +24,7 @@
 
       let mercureUrl = $store.state.apiInfo.mercureUrl || ''
       log('Mercure URL from API: ' + mercureUrl)
-      
+  
       if (!mercureUrl.toLowerCase().startsWith('http')) {
         let serverUrl = $store.state.config.server
         if (!serverUrl.endsWith('/')) {
@@ -42,7 +42,7 @@
       try {
         const urlObj = new URL(mercureUrl)
         const pathname = urlObj.pathname
-        
+  
         // If path is /mercure or just /, change to /.well-known/mercure
         if (pathname === '/mercure' || pathname === '/' || pathname === '') {
           urlObj.pathname = '/.well-known/mercure'
@@ -62,36 +62,36 @@
 
       const url = new URL(mercureUrl)
       url.searchParams.append('topic', `/unidades/${$store.state.config.unity}/painel`)
-      
+  
       log('Connecting to EventSource: ' + url.toString())
-      
+  
       try {
         eventSource = new EventSource(url)
-        
+  
         eventSource.onopen = (e) => {
           log('EventSource connection opened successfully')
           stopPolling() // Stop polling if EventSource works
         }
-        
+  
         eventSource.onmessage = (e) => {
           log('EventSource message received')
           fetchMessages($root, $store)
         }
-        
+  
         eventSource.onerror = (e) => {
           log('EventSource error occurred. ReadyState: ' + eventSource.readyState)
-          
+  
           // Check if we can get more info about the error
           // EventSource doesn't expose HTTP status directly, but we can infer from readyState
           if (eventSource.readyState === EventSource.CLOSED) {
             log('EventSource connection closed. This might indicate a server error (e.g., 502 Bad Gateway).')
             log('The Mercure server at ' + url.toString() + ' is not responding correctly.')
             log('Falling back to polling mode immediately.')
-            
+  
             disconnect()
             // For 502 errors, immediately fall back to polling instead of retrying
             startPolling($root, $store)
-            
+  
             // Still try to reconnect in background, but don't block on it
             setTimeout(() => {
               if (!usePolling || attempts > 0) {
