@@ -5,6 +5,8 @@
   let eventSource = null
   let running = false
   let timeoutId = 0
+  let pollingInterval = null
+  let usePolling = false
 
   // this funciton is needed because computed value is not being updated
   function isExpired ($store) {
@@ -13,12 +15,16 @@
 
   function doConnect ($root, $store, attempts) {
     if (attempts <= 0) {
+      log('Max connection attempts reached. Falling back to polling mode.')
+      startPolling($root, $store)
       return
     }
     $store.dispatch('fetchApiInfo').then(() => {
       disconnect()
 
       let mercureUrl = $store.state.apiInfo.mercureUrl || ''
+      log('Mercure URL from API: ' + mercureUrl)
+      
       if (!mercureUrl.toLowerCase().startsWith('http')) {
         let serverUrl = $store.state.config.server
         if (!serverUrl.endsWith('/')) {
@@ -31,13 +37,85 @@
         }
       }
 
+      // Fix common URL issues: ensure we use the correct Mercure endpoint
+      // The correct endpoint is /.well-known/mercure, not /mercure
+      try {
+        const urlObj = new URL(mercureUrl)
+        const pathname = urlObj.pathname
+        
+        // If path is /mercure or just /, change to /.well-known/mercure
+        if (pathname === '/mercure' || pathname === '/' || pathname === '') {
+          urlObj.pathname = '/.well-known/mercure'
+          mercureUrl = urlObj.toString()
+          log('Fixed Mercure URL to use correct endpoint: ' + mercureUrl)
+        } else if (!pathname.includes('.well-known/mercure')) {
+          // If path doesn't contain .well-known/mercure, append it
+          urlObj.pathname = '/.well-known/mercure'
+          mercureUrl = urlObj.toString()
+          log('Fixed Mercure URL to use correct endpoint: ' + mercureUrl)
+        }
+      } catch (e) {
+        log('Error parsing Mercure URL, using as-is: ' + e.message)
+      }
+
+      log('Final Mercure URL: ' + mercureUrl)
+
       const url = new URL(mercureUrl)
       url.searchParams.append('topic', `/unidades/${$store.state.config.unity}/painel`)
-      eventSource = new EventSource(url)
-      eventSource.onmessage = (e) => {
-        fetchMessages($root, $store)
+      
+      log('Connecting to EventSource: ' + url.toString())
+      
+      try {
+        eventSource = new EventSource(url)
+        
+        eventSource.onopen = (e) => {
+          log('EventSource connection opened successfully')
+          stopPolling() // Stop polling if EventSource works
+        }
+        
+        eventSource.onmessage = (e) => {
+          log('EventSource message received')
+          fetchMessages($root, $store)
+        }
+        
+        eventSource.onerror = (e) => {
+          log('EventSource error occurred. ReadyState: ' + eventSource.readyState)
+          
+          // Check if we can get more info about the error
+          // EventSource doesn't expose HTTP status directly, but we can infer from readyState
+          if (eventSource.readyState === EventSource.CLOSED) {
+            log('EventSource connection closed. This might indicate a server error (e.g., 502 Bad Gateway).')
+            log('The Mercure server at ' + url.toString() + ' is not responding correctly.')
+            log('Falling back to polling mode immediately.')
+            
+            disconnect()
+            // For 502 errors, immediately fall back to polling instead of retrying
+            startPolling($root, $store)
+            
+            // Still try to reconnect in background, but don't block on it
+            setTimeout(() => {
+              if (!usePolling || attempts > 0) {
+                log('Attempting to reconnect EventSource in background...')
+                doConnect($root, $store, attempts - 1)
+              }
+            }, 5000)
+          } else if (eventSource.readyState === EventSource.CONNECTING) {
+            // Still connecting, wait a bit more
+            log('EventSource still connecting...')
+          } else if (eventSource.readyState === EventSource.OPEN) {
+            // Connection is open but error occurred - might be temporary
+            log('EventSource is open but error occurred - might be temporary network issue')
+          }
+        }
+      } catch (error) {
+        log('Error creating EventSource: ' + error.message)
+        $root.$swal('Erro de Conexão', 'Não foi possível conectar ao servidor de eventos. Verifique se a URL do Mercure está acessível publicamente.', 'error')
+        setTimeout(() => {
+          doConnect($root, $store, attempts - 1)
+        }, 5000)
       }
     }).catch((e) => {
+      log('Error fetching API info: ' + e)
       clearToken($root, $store).then(() => {
         doConnect($root, $store, attempts - 1)
       })
@@ -103,6 +181,28 @@
   function disconnect () {
     if (eventSource) {
       eventSource.close()
+      eventSource = null
+    }
+    stopPolling()
+  }
+
+  function startPolling ($root, $store) {
+    if (usePolling || pollingInterval) {
+      return
+    }
+    usePolling = true
+    log('Starting polling mode as fallback (checking every 3 seconds)')
+    pollingInterval = setInterval(() => {
+      fetchMessages($root, $store)
+    }, 3000)
+  }
+
+  function stopPolling () {
+    if (pollingInterval) {
+      clearInterval(pollingInterval)
+      pollingInterval = null
+      usePolling = false
+      log('Stopped polling mode')
     }
   }
 
@@ -156,6 +256,7 @@
     beforeDestroy () {
       running = false
       disconnect()
+      stopPolling()
       clearTimeout(timeoutId)
     }
   }
